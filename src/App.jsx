@@ -108,6 +108,53 @@ async function callAI(prompt, sys) {
 }
 
 /* ═══════════════════════════════════════
+   GMAIL ENGINE
+═══════════════════════════════════════ */
+async function sendEmail({ access_token, to, subject, body }) {
+  const res = await fetch('/api/gmail-send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ access_token, to, subject, body })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Errore invio email')
+  return data
+}
+
+function getGmailTokens() {
+  try {
+    const raw = localStorage.getItem('gmail_tokens')
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
+function saveGmailTokens(tokens) {
+  try { localStorage.setItem('gmail_tokens', JSON.stringify(tokens)) } catch {}
+}
+
+function clearGmailTokens() {
+  try { localStorage.removeItem('gmail_tokens') } catch {}
+}
+
+// Estrae token dal URL dopo OAuth callback
+function extractGmailTokensFromURL() {
+  const params = new URLSearchParams(window.location.search)
+  if (params.get('gmail_connected') === 'true') {
+    const tokenData = params.get('token_data')
+    if (tokenData) {
+      try {
+        const tokens = JSON.parse(atob(tokenData))
+        saveGmailTokens(tokens)
+        // Pulisce URL
+        window.history.replaceState({}, '', '/')
+        return tokens
+      } catch { return null }
+    }
+  }
+  return null
+}
+
+/* ═══════════════════════════════════════
    HELPERS
 ═══════════════════════════════════════ */
 const scoreCol = s => s>=80 ? T.green : s>=60 ? T.gold : T.muted
@@ -724,7 +771,7 @@ function LeadsView({leads, setLeads, setView, setAgentLead, addActivity}) {
 /* ═══════════════════════════════════════
    AGENT VIEW
 ═══════════════════════════════════════ */
-function AgentView({leads, setLeads, agentLead, setAgentLead, addActivity, userId, userPlan, taskCount, setTaskCount}) {
+function AgentView({leads, setLeads, agentLead, setAgentLead, addActivity, userId, userPlan, taskCount, setTaskCount, gmailTokens, setView}) {
   const [task,       setTask]      = useState(null)
   const [output,     setOutput]    = useState(null)
   const [loading,    setLoading]   = useState(false)
@@ -1082,8 +1129,39 @@ function AnalyticsView({leads}) {
 /* ═══════════════════════════════════════
    SETTINGS VIEW
 ═══════════════════════════════════════ */
-function SettingsView({user, onLogout, setView, taskCount}) {
+function SettingsView({user, onLogout, setView, taskCount, gmailTokens, setGmailTokens}) {
   const pl = PLANS.find(p=>p.id===user.plan)||PLANS[1]
+  const [sendingTest, setSendingTest] = useState(false)
+  const [testResult,  setTestResult]  = useState("")
+
+  const connectGmail = () => {
+    const userId = user.id || user.storageKey || "demo"
+    window.location.href = `/api/gmail-auth?userId=${userId}`
+  }
+
+  const disconnectGmail = () => {
+    clearGmailTokens()
+    setGmailTokens(null)
+    setTestResult("")
+  }
+
+  const sendTestEmail = async () => {
+    if (!gmailTokens?.access_token) return
+    setSendingTest(true); setTestResult("")
+    try {
+      await sendEmail({
+        access_token: gmailTokens.access_token,
+        to: gmailTokens.email,
+        subject: "✅ PipelineAI — Test email funzionante!",
+        body: `Ciao ${user.name||""}!\n\nQuesto è un test di PipelineAI.\nLa tua Gmail è collegata correttamente e può inviare email ai tuoi lead.\n\n— Il team PipelineAI`
+      })
+      setTestResult("✅ Email di test inviata! Controlla la tua inbox.")
+    } catch(e) {
+      setTestResult("❌ Errore: " + e.message)
+    }
+    setSendingTest(false)
+  }
+
   return (
     <div style={{padding:"32px 36px",maxWidth:680}}>
       <div style={{marginBottom:32}}>
@@ -1128,13 +1206,68 @@ function SettingsView({user, onLogout, setView, taskCount}) {
         </div>
       </Card>
 
+      {/* Gmail Connection Card */}
+      <Card style={{padding:28,marginBottom:16}} glow={gmailTokens ? T.green : T.muted}>
+        <div style={{fontFamily:"'DM Mono',monospace",fontSize:10,color:T.muted,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:18}}>
+          ✉️ Gmail — Invio Email
+        </div>
+
+        {gmailTokens ? (
+          <div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <div>
+                <div style={{fontSize:15,fontWeight:600,color:T.white,marginBottom:4}}>
+                  ✅ Gmail collegata
+                </div>
+                <div style={{fontSize:13,color:T.muted}}>{gmailTokens.email}</div>
+              </div>
+              <div style={{display:"flex",gap:10}}>
+                <Btn variant="secondary" onClick={sendTestEmail} disabled={sendingTest}>
+                  {sendingTest ? "Invio…" : "Test email"}
+                </Btn>
+                <Btn variant="ghost" onClick={disconnectGmail}>Scollega</Btn>
+              </div>
+            </div>
+            {testResult && (
+              <div style={{background:testResult.startsWith("✅")?`${T.green}12`:`${T.accent}12`,
+                border:`1px solid ${testResult.startsWith("✅")?T.green:T.accent}28`,
+                borderRadius:8,padding:"10px 14px",fontSize:12,
+                color:testResult.startsWith("✅")?T.green:T.accent}}>
+                {testResult}
+              </div>
+            )}
+            <div style={{marginTop:12,fontSize:12,color:T.muted,lineHeight:1.5}}>
+              Le email generate dall'AI verranno inviate direttamente dalla tua Gmail. I tuoi lead vedranno la tua email come mittente.
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div style={{fontSize:14,color:T.text,marginBottom:16,lineHeight:1.6}}>
+              Collega la tua Gmail per inviare le email generate dall'AI direttamente ai tuoi lead. I lead vedranno la tua email come mittente — non sanno che usi PipelineAI.
+            </div>
+            <button onClick={connectGmail}
+              style={{display:"flex",alignItems:"center",gap:10,background:"#fff",color:"#333",
+                border:"1px solid #ddd",borderRadius:8,padding:"11px 20px",fontSize:13,
+                fontWeight:600,cursor:"pointer",fontFamily:"'Geist',sans-serif"}}>
+              <svg width="18" height="18" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+              </svg>
+              Connetti con Google
+            </button>
+          </div>
+        )}
+      </Card>
+
       <Card style={{padding:28}}>
         <div style={{fontFamily:"'DM Mono',monospace",fontSize:10,color:T.muted,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:18}}>Stato integrazioni</div>
         {[
-          {name:"Anthropic AI",    status:"Connesso",   color:T.green,  icon:"🤖"},
-          {name:"Database",        status:"Demo mode",  color:T.gold,   icon:"🗄️"},
-          {name:"Invio email",     status:"Da configurare",color:T.muted,icon:"✉️"},
-          {name:"Stripe Payments", status:"Da configurare",color:T.muted,icon:"💳"},
+          {name:"Anthropic AI",    status:"Connesso",                          color:T.green,  icon:"🤖"},
+          {name:"Gmail",           status:gmailTokens?"Connessa":"Da collegare", color:gmailTokens?T.green:T.muted, icon:"✉️"},
+          {name:"Database",        status:"Supabase attivo",                   color:T.green,  icon:"🗄️"},
+          {name:"Stripe Payments", status:"Da configurare",                    color:T.muted,  icon:"💳"},
         ].map(s=>(
           <div key={s.name} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
             padding:"12px 0",borderBottom:`1px solid ${T.border}`}}>
@@ -1162,12 +1295,19 @@ const INIT_ACTS = [
 ]
 
 export default function PipelineAI() {
-  const [user,       setUser]       = useState(null)
-  const [view,       setView]       = useState("dashboard")
-  const [leads,      setLeads]      = useState(DEMO_LEADS)
-  const [agentLead,  setAgentLead]  = useState(null)
-  const [activities, setActivities] = useState(INIT_ACTS)
-  const [taskCount,  setTaskCount]  = useState(0)
+  const [user,        setUser]        = useState(null)
+  const [view,        setView]        = useState("dashboard")
+  const [leads,       setLeads]       = useState(DEMO_LEADS)
+  const [agentLead,   setAgentLead]   = useState(null)
+  const [activities,  setActivities]  = useState(INIT_ACTS)
+  const [taskCount,   setTaskCount]   = useState(0)
+  const [gmailTokens, setGmailTokens] = useState(() => getGmailTokens())
+
+  // Controlla se si torna da OAuth Gmail
+  useEffect(() => {
+    const tokens = extractGmailTokensFromURL()
+    if (tokens) setGmailTokens(tokens)
+  }, [])
 
   const addActivity = useCallback((lead,action,type)=>{
     setActivities(p=>[{id:Date.now(),lead,action,time:"adesso",type},...p.slice(0,19)])
@@ -1285,9 +1425,9 @@ export default function PipelineAI() {
         <main style={{flex:1,overflowY:"auto",background:T.bg}}>
           {view==="dashboard" && <DashboardView leads={leads} activities={activities}/>}
           {view==="leads"     && <LeadsView leads={leads} setLeads={setLeads} setView={setView} setAgentLead={setAgentLead} addActivity={addActivity}/>}
-          {view==="agent"     && <AgentView leads={leads} setLeads={setLeads} agentLead={agentLead} setAgentLead={setAgentLead} addActivity={addActivity} userId={user?.id||user?.storageKey} userPlan={user?.plan||"pro"} taskCount={taskCount} setTaskCount={setTaskCount}/>}
+          {view==="agent"     && <AgentView leads={leads} setLeads={setLeads} agentLead={agentLead} setAgentLead={setAgentLead} addActivity={addActivity} userId={user?.id||user?.storageKey} userPlan={user?.plan||"pro"} taskCount={taskCount} setTaskCount={setTaskCount} gmailTokens={gmailTokens} setView={setView}/>}
           {view==="analytics" && <AnalyticsView leads={leads}/>}
-          {view==="settings"  && <SettingsView user={user} onLogout={onLogout} setView={setView} taskCount={taskCount}/>}
+          {view==="settings"  && <SettingsView user={user} onLogout={onLogout} setView={setView} taskCount={taskCount} gmailTokens={gmailTokens} setGmailTokens={setGmailTokens}/>}
         </main>
       </div>
     </>
