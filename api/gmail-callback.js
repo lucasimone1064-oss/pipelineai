@@ -14,7 +14,7 @@ export default async function handler(req, res) {
 
   const clientId = process.env.GOOGLE_CLIENT_ID
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET
-  const redirectUri = `${process.env.VITE_APP_URL || 'https://pipelineai-beta.vercel.app'}/api/gmail-callback`
+  const redirectUri = 'https://pipelineai-beta.vercel.app/api/gmail-callback'
 
   try {
     // Scambia il codice con i token

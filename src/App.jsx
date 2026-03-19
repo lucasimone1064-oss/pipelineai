@@ -771,6 +771,142 @@ function LeadsView({leads, setLeads, setView, setAgentLead, addActivity}) {
 /* ═══════════════════════════════════════
    AGENT VIEW
 ═══════════════════════════════════════ */
+/* ═══════════════════════════════════════
+   SEQUENCE ACTIONS COMPONENT
+═══════════════════════════════════════ */
+function SendEmailButton({ gmailTokens, to, subject, body, onSent }) {
+  const [sending, setSending] = useState(false)
+  const [sent,    setSent]    = useState(false)
+  const [error,   setError]   = useState("")
+
+  const send = async () => {
+    setSending(true); setError("")
+    try {
+      await sendEmail({ access_token: gmailTokens.access_token, to, subject, body })
+      setSent(true)
+      if (onSent) onSent()
+    } catch(e) { setError(e.message) }
+    setSending(false)
+  }
+
+  if (sent) return <div style={{fontSize:12,color:T.green,marginTop:8}}>✅ Email inviata a {to}!</div>
+  return (
+    <div style={{marginTop:12}}>
+      <button onClick={send} disabled={sending}
+        style={{background:T.blue,color:"#fff",border:"none",borderRadius:7,
+          padding:"9px 18px",fontSize:12,fontWeight:700,cursor:sending?"not-allowed":"pointer",
+          opacity:sending?0.6:1,fontFamily:"'Geist',sans-serif"}}>
+        {sending ? "Invio…" : `✉️ Invia a ${to}`}
+      </button>
+      {error && <div style={{fontSize:11,color:T.accent,marginTop:6}}>❌ {error}</div>}
+    </div>
+  )
+}
+
+function SequenceActions({ text, lead, gmailTokens, userId, setView, addActivity }) {
+  const [activating, setActivating] = useState(false)
+  const [activated,  setActivated]  = useState(false)
+  const [error,      setError]      = useState("")
+
+  // Parse le email dal testo generato dall'AI
+  const parseEmails = (rawText) => {
+    const emails = []
+    const parts = rawText.split(/EMAIL \d+\s*—\s*GIORNO\s*(\d+)/i)
+    const delays = [0, 6, 14]
+    let emailIndex = 0
+
+    for (let i = 1; i < parts.length; i += 2) {
+      const dayNum = parseInt(parts[i]) || delays[emailIndex] || 0
+      const content = parts[i + 1] || ""
+      const subjectMatch = content.match(/OGGETTO:\s*(.+?)(?:\n|$)/i)
+      const subject = subjectMatch ? subjectMatch[1].trim() : `Follow-up ${emailIndex + 1}`
+      const body = content.replace(/OGGETTO:.*?\n/i, "").trim()
+
+      emails.push({ subject, body, delay_days: emailIndex === 0 ? 0 : (emailIndex === 1 ? 6 : 14) })
+      emailIndex++
+    }
+
+    // Fallback: se il parsing non funziona bene, crea 3 email generiche
+    if (emails.length === 0) {
+      return [
+        { subject: `Introduzione — ${lead?.company||""}`, body: rawText.slice(0, 500), delay_days: 0 },
+        { subject: `Seguito — ${lead?.company||""}`, body: "Gentile contatto,\n\nSeguendo il nostro precedente contatto...", delay_days: 6 },
+        { subject: `Ultimo contatto — ${lead?.company||""}`, body: "Gentile contatto,\n\nQuesto è il mio ultimo messaggio...", delay_days: 14 },
+      ]
+    }
+    return emails.slice(0, 3)
+  }
+
+  const activateSequence = async () => {
+    if (!gmailTokens) { setView("settings"); return }
+    if (!lead?.email) { setError("Il lead non ha un'email"); return }
+
+    setActivating(true); setError("")
+    try {
+      const emails = parseEmails(text)
+      const res = await fetch('/api/create-sequence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: userId || "demo",
+          lead_id: lead.id,
+          lead_name: lead.name,
+          lead_email: lead.email,
+          emails,
+          gmail_access_token: gmailTokens.access_token,
+          gmail_refresh_token: gmailTokens.refresh_token || null,
+        })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      setActivated(true)
+      addActivity(lead.name, `Sequenza 3 email attivata — prima email programmata`, "email")
+    } catch(e) { setError(e.message) }
+    setActivating(false)
+  }
+
+  if (activated) return (
+    <div style={{background:`${T.green}12`,border:`1px solid ${T.green}28`,borderRadius:8,
+      padding:"14px 16px",marginTop:12}}>
+      <div style={{fontSize:13,fontWeight:700,color:T.green,marginBottom:4}}>✅ Sequenza attivata!</div>
+      <div style={{fontSize:12,color:T.muted}}>
+        3 email programmate per {lead?.name}:<br/>
+        📧 Email 1 → Oggi<br/>
+        📧 Email 2 → Tra 6 giorni<br/>
+        📧 Email 3 → Tra 14 giorni
+      </div>
+    </div>
+  )
+
+  return (
+    <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:10}}>
+      {!gmailTokens && (
+        <div style={{fontSize:12,color:T.gold,background:`${T.gold}12`,border:`1px solid ${T.gold}28`,
+          borderRadius:7,padding:"10px 14px"}}>
+          ⚠️ Collega Gmail nelle Impostazioni per inviare le email automaticamente
+        </div>
+      )}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        {gmailTokens && lead?.email && (
+          <button onClick={activateSequence} disabled={activating}
+            style={{background:T.green,color:"#fff",border:"none",borderRadius:7,
+              padding:"10px 18px",fontSize:13,fontWeight:700,
+              cursor:activating?"not-allowed":"pointer",opacity:activating?0.6:1,
+              fontFamily:"'Geist',sans-serif",boxShadow:`0 0 20px ${T.green}30`}}>
+            {activating ? "Attivazione…" : "🚀 Attiva sequenza automatica"}
+          </button>
+        )}
+        {!lead?.email && (
+          <div style={{fontSize:12,color:T.muted,fontStyle:"italic"}}>
+            Aggiungi l'email del lead per attivare la sequenza automatica
+          </div>
+        )}
+      </div>
+      {error && <div style={{fontSize:11,color:T.accent}}>❌ {error}</div>}
+    </div>
+  )
+}
+
 function AgentView({leads, setLeads, agentLead, setAgentLead, addActivity, userId, userPlan, taskCount, setTaskCount, gmailTokens, setView}) {
   const [task,       setTask]      = useState(null)
   const [output,     setOutput]    = useState(null)
@@ -1006,7 +1142,32 @@ Usa intestazioni "== TITOLO ==". Max 400 parole. Includi: Executive Summary, Pro
                 })()}
 
                 {["sequence","respond","proposal"].includes(output.type)&&(
-                  <div style={{fontSize:13,color:T.text,lineHeight:1.8,whiteSpace:"pre-wrap",maxHeight:500,overflowY:"auto",fontFamily:"'Geist',sans-serif"}}>{output.text}</div>
+                  <div>
+                    <div style={{fontSize:13,color:T.text,lineHeight:1.8,whiteSpace:"pre-wrap",maxHeight:400,overflowY:"auto",fontFamily:"'Geist',sans-serif",marginBottom:16}}>{output.text}</div>
+
+                    {/* Azioni per la sequenza email */}
+                    {output.type==="sequence" && (
+                      <SequenceActions
+                        text={output.text}
+                        lead={agentLead}
+                        gmailTokens={gmailTokens}
+                        userId={userId}
+                        setView={setView}
+                        addActivity={addActivity}
+                      />
+                    )}
+
+                    {/* Invia email singola */}
+                    {output.type==="respond" && agentLead?.email && gmailTokens && (
+                      <SendEmailButton
+                        gmailTokens={gmailTokens}
+                        to={agentLead.email}
+                        subject={`Re: Seguendo up — ${agentLead.company}`}
+                        body={output.text}
+                        onSent={()=>addActivity(agentLead.name,"Risposta inviata via Gmail","email")}
+                      />
+                    )}
+                  </div>
                 )}
               </Card>
             )}
@@ -1285,6 +1446,99 @@ function SettingsView({user, onLogout, setView, taskCount, gmailTokens, setGmail
 }
 
 /* ═══════════════════════════════════════
+   SEQUENCES VIEW
+═══════════════════════════════════════ */
+function SequencesView({ userId, gmailTokens, setView }) {
+  const [sequences, setSequences] = useState([])
+  const [loading,   setLoading]   = useState(true)
+
+  useEffect(() => {
+    if (!userId) { setLoading(false); return }
+    fetch(`/api/get-sequences?user_id=${userId}`)
+      .then(r => r.json())
+      .then(d => { setSequences(d.sequences || []); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [userId])
+
+  const statusColor = s => s==="sent"?T.green:s==="pending"?T.gold:s==="error"?T.accent:T.muted
+  const statusLabel = s => s==="sent"?"✅ Inviata":s==="pending"?"⏳ In attesa":s==="error"?"❌ Errore":"—"
+
+  return (
+    <div style={{padding:"32px 36px"}}>
+      <div style={{marginBottom:32}}>
+        <h1 style={{fontFamily:"'Instrument Serif',serif",fontSize:38,color:T.white,letterSpacing:"-0.02em",marginBottom:6}}>Sequenze</h1>
+        <p style={{color:T.muted,fontSize:14}}>Email automatiche programmate per i tuoi lead</p>
+      </div>
+
+      {!gmailTokens && (
+        <Card style={{padding:28,marginBottom:20,textAlign:"center"}}>
+          <div style={{fontSize:18,marginBottom:12}}>✉️</div>
+          <div style={{fontSize:15,fontWeight:600,color:T.white,marginBottom:8}}>Gmail non collegata</div>
+          <div style={{fontSize:13,color:T.muted,marginBottom:16}}>Collega la tua Gmail per attivare le sequenze automatiche</div>
+          <Btn onClick={()=>setView("settings")}>Vai alle Impostazioni →</Btn>
+        </Card>
+      )}
+
+      {loading ? (
+        <Card style={{padding:40,textAlign:"center"}}>
+          <Spinner/>
+        </Card>
+      ) : sequences.length === 0 ? (
+        <Card style={{padding:48,textAlign:"center"}}>
+          <div style={{fontSize:42,marginBottom:16}}>📭</div>
+          <div style={{fontSize:18,fontWeight:600,color:T.white,marginBottom:8}}>Nessuna sequenza attiva</div>
+          <div style={{fontSize:13,color:T.muted,marginBottom:20}}>Vai sull'Agente AI, genera una sequenza email e clicca "Attiva sequenza automatica"</div>
+          <Btn onClick={()=>setView("agent")}>Vai all'Agente AI →</Btn>
+        </Card>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          {sequences.map(seq => (
+            <Card key={seq.id} style={{padding:24}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+                <div>
+                  <div style={{fontSize:16,fontWeight:700,color:T.white,marginBottom:4}}>{seq.lead_name}</div>
+                  <div style={{fontSize:12,color:T.muted}}>{seq.lead_email}</div>
+                </div>
+                <span style={{fontSize:10,fontWeight:700,color:seq.status==="active"?T.green:T.muted,
+                  background:`${seq.status==="active"?T.green:T.muted}14`,
+                  padding:"3px 10px",borderRadius:20,fontFamily:"monospace"}}>
+                  {seq.status==="active"?"ATTIVA":"COMPLETATA"}
+                </span>
+              </div>
+
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {(seq.scheduled_emails||[]).sort((a,b)=>new Date(a.scheduled_for)-new Date(b.scheduled_for)).map((email,i) => (
+                  <div key={email.id} style={{display:"flex",alignItems:"center",gap:12,
+                    background:T.surface,borderRadius:7,padding:"10px 14px"}}>
+                    <div style={{width:24,height:24,borderRadius:"50%",background:`${statusColor(email.status)}20`,
+                      display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,
+                      fontWeight:700,color:statusColor(email.status),flexShrink:0}}>
+                      {i+1}
+                    </div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:12,fontWeight:500,color:T.white,overflow:"hidden",
+                        textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{email.subject}</div>
+                      <div style={{fontSize:10,color:T.muted,marginTop:2}}>
+                        {email.status==="sent"
+                          ? `Inviata il ${new Date(email.sent_at).toLocaleDateString("it-IT")}`
+                          : `Programmata per ${new Date(email.scheduled_for).toLocaleDateString("it-IT")}`
+                        }
+                      </div>
+                    </div>
+                    <span style={{fontSize:11,fontWeight:700,color:statusColor(email.status),
+                      fontFamily:"monospace",flexShrink:0}}>{statusLabel(email.status)}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════
    MAIN APP
 ═══════════════════════════════════════ */
 const INIT_ACTS = [
@@ -1340,6 +1594,7 @@ export default function PipelineAI() {
     {id:"dashboard",icon:"◼",label:"Dashboard"},
     {id:"leads",    icon:"◉",label:"Lead"},
     {id:"agent",    icon:"⬡",label:"Agente AI"},
+    {id:"sequences",icon:"◎",label:"Sequenze"},
     {id:"analytics",icon:"◈",label:"Analytics"},
     {id:"settings", icon:"◧",label:"Impostazioni"},
   ]
@@ -1427,6 +1682,7 @@ export default function PipelineAI() {
           {view==="leads"     && <LeadsView leads={leads} setLeads={setLeads} setView={setView} setAgentLead={setAgentLead} addActivity={addActivity}/>}
           {view==="agent"     && <AgentView leads={leads} setLeads={setLeads} agentLead={agentLead} setAgentLead={setAgentLead} addActivity={addActivity} userId={user?.id||user?.storageKey} userPlan={user?.plan||"pro"} taskCount={taskCount} setTaskCount={setTaskCount} gmailTokens={gmailTokens} setView={setView}/>}
           {view==="analytics" && <AnalyticsView leads={leads}/>}
+          {view==="sequences" && <SequencesView userId={user?.id||user?.storageKey} gmailTokens={gmailTokens} setView={setView}/>}
           {view==="settings"  && <SettingsView user={user} onLogout={onLogout} setView={setView} taskCount={taskCount} gmailTokens={gmailTokens} setGmailTokens={setGmailTokens}/>}
         </main>
       </div>

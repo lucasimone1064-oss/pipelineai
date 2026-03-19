@@ -3,7 +3,7 @@
 
 export default async function handler(req, res) {
   const clientId = process.env.GOOGLE_CLIENT_ID
-  const redirectUri = `${process.env.VITE_APP_URL || 'https://pipelineai-beta.vercel.app'}/api/gmail-callback`
+  const redirectUri = 'https://pipelineai-beta.vercel.app/api/gmail-callback'
 
   const scope = [
     'https://www.googleapis.com/auth/gmail.send',
@@ -20,7 +20,6 @@ export default async function handler(req, res) {
   authUrl.searchParams.set('access_type', 'offline')
   authUrl.searchParams.set('prompt', 'consent')
 
-  // Passa userId come state per sapere a chi appartiene il token
   const userId = req.query.userId || 'unknown'
   authUrl.searchParams.set('state', userId)
 
