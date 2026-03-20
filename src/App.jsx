@@ -94,17 +94,13 @@ function TaskBadge({ used, limit, color }) {
    AI ENGINE
 ═══════════════════════════════════════ */
 async function callAI(prompt, sys) {
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
+  const r = await fetch("/api/ai", {
     method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({
-      model:"claude-sonnet-4-20250514", max_tokens:1200,
-      system: sys || "Sei PipelineAI, agente AI per vendite B2B in italiano. Preciso e persuasivo.",
-      messages:[{role:"user", content:prompt}]
-    })
+    body: JSON.stringify({ prompt, sys })
   })
   const d = await r.json()
-  if (d.error) throw new Error(d.error.message)
-  return d.content?.map(b=>b.text||"").join("") || ""
+  if (d.error) throw new Error(d.error)
+  return d.text || ""
 }
 
 /* ═══════════════════════════════════════
